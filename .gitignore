@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+*/.DS_Store
+
+# Python
+.venv/
+*/.venv/
+__pycache__/
+*.py[cod]
+
+# PlatformIO
+.pio/
+*/.pio/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.out
+motion-sensor/*.pdf
