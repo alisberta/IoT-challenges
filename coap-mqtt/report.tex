@@ -1,0 +1,505 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=2.6cm]{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+\usepackage{array}
+\usepackage{longtable}
+
+% ----- Colors -----
+\definecolor{bluepoli}{cmyk}{0.4,0.1,0,0.4}
+\definecolor{lightbluepoli}{RGB}{235,242,250}
+\definecolor{todobg}{RGB}{248,248,248}
+\definecolor{todoframe}{RGB}{180,180,180}
+
+% ----- Hyperref -----
+\hypersetup{
+    colorlinks=true,
+    linkcolor=bluepoli,
+    urlcolor=bluepoli,
+    citecolor=bluepoli
+}
+
+% ----- Section style -----
+\titleformat{\section}
+{\color{bluepoli}\normalfont\Large\bfseries}
+{\thesection}{0.8em}{}
+
+\titleformat{\subsection}
+{\color{bluepoli}\normalfont\large\bfseries}
+{\thesubsection}{0.8em}{}
+
+\titleformat{\subsubsection}
+{\color{bluepoli}\normalfont\normalsize\bfseries}
+{\thesubsubsection}{0.8em}{}
+
+% ----- Caption style -----
+\captionsetup{
+    labelfont={color=bluepoli,bf},
+    textfont=it
+}
+
+% ----- Header / footer -----
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{bluepoli}{IoT Challenge 2}}
+\fancyhead[R]{\textcolor{bluepoli}{Packet Sniffing Report}}
+\fancyfoot[C]{\thepage}
+\setlength{\headheight}{14pt}
+
+% ----- Code style -----
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    columns=fullflexible,
+    backgroundcolor=\color{lightbluepoli},
+    rulecolor=\color{bluepoli},
+    keywordstyle=\color{bluepoli}\bfseries,
+    commentstyle=\itshape\color{gray},
+    showstringspaces=false
+}
+
+% ----- TODO box -----
+\newtcolorbox{todobox}{
+    colback=todobg,
+    colframe=todoframe,
+    boxrule=0.5pt,
+    arc=2mm,
+    left=2mm,
+    right=2mm,
+    top=1mm,
+    bottom=1mm
+}
+
+\newcommand{\TODO}[1]{
+\begin{todobox}
+\textbf{TODO:} #1
+\end{todobox}
+}
+
+% ----- Title -----
+\title{
+    \vspace{-1cm}
+    {\Huge\textcolor{bluepoli}{IoT Challenge 2}}\\[0.4cm]
+    {\Large Packet Sniffing Report}
+}
+\author{
+    Marco Abbadessa - 10854816 \\
+    Alice Berta - 10889590 - leader
+}
+\date{Academic Year 2025--2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\vspace{0.5cm}
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Introduction}
+% ============================================================
+
+The goal of this challenge is to analyze two packet captures, namely
+\texttt{A.pcapng} and \texttt{B.pcapng}, in order to answer a set of protocol-level
+questions related to CoAP, MQTT, and MQTT-SN communications. The analysis was carried
+out mainly with Wireshark, using protocol-specific display filters and manual packet
+inspection. Whenever needed, additional fields were added as custom columns in order
+to simplify the identification of flows, brokers, topics, and client identifiers.\\
+
+The challenge is divided into two main parts. The first part concerns the analysis of
+the packet captures and the derivation of the answers to CQ1--CQ8. The second part is
+a separate theoretical exercise about communication energy consumption in a smart
+building scenario. In this report we focus on the motivated answers for the packet
+analysis questions.\\
+
+Before addressing the individual questions on \texttt{B.pcapng}, it was necessary to
+perform a preliminary network inspection in order to identify which brokers were
+present in the capture and how the MQTT traffic was distributed among them. This
+initial step was essential because the wording of several questions explicitly
+distinguishes between the local broker and the public HiveMQ broker. Therefore, the
+rest of the analysis relies on a precise identification of the network endpoints
+involved.
+
+% ============================================================
+\section{Preliminary Network Analysis on \texttt{B.pcapng}}
+% ============================================================
+
+As a first step, all MQTT \texttt{CONNECT} packets were isolated with the filter:
+
+\begin{lstlisting}
+mqtt.msgtype == 1
+\end{lstlisting}
+
+By inspecting the destination IP addresses of the resulting packets, two clearly
+different traffic patterns emerged. On the one hand, some connections involved source
+and destination address \texttt{::1}, which is the IPv6 loopback interface. On the
+other hand, several connections originated from the host \texttt{10.0.2.15} and were
+directed to external public IP addresses.\\
+
+The local broker was identified through the packets addressed to \texttt{::1}. This
+address is the IPv6 loopback address and is equivalent to \texttt{127.0.0.1} in IPv4.
+Its presence indicates that the broker and the client are running on the same machine,
+which is typical of a local or simulated setup. Moreover, starting from a certain
+point in the capture, the Client IDs used in the connections toward \texttt{::1}
+show the prefix \texttt{mosq-}, which is automatically generated by Mosquitto when
+clients do not explicitly provide an identifier. This strongly suggests that the local
+broker is a \textbf{Mosquitto} instance.\\
+
+To identify the public HiveMQ broker, DNS traffic was inspected with the filter:
+
+\begin{lstlisting}
+dns.qry.name contains "hivemq"
+\end{lstlisting}
+
+The DNS replies explicitly resolved \texttt{broker.hivemq.com} to three IPv4
+addresses:
+
+\begin{itemize}
+    \item \texttt{18.192.151.104}
+    \item \texttt{35.158.43.69}
+    \item \texttt{35.158.34.213}
+\end{itemize}
+
+These addresses correspond to AWS-hosted servers in the Frankfurt region. The
+identification was then confirmed by filtering the MQTT traffic involving those IPs:
+
+\begin{lstlisting}
+mqtt and (ip.addr == 18.192.151.104 or ip.addr == 35.158.43.69 or ip.addr == 35.158.34.213)
+\end{lstlisting}
+
+This filter showed effective unencrypted MQTT traffic toward two of the three HiveMQ
+addresses, namely \texttt{18.192.151.104} and \texttt{35.158.43.69}. The address
+\texttt{35.158.34.213}, although returned by DNS as a valid HiveMQ endpoint, does not
+appear in any MQTT packet of the capture.\\
+
+A fourth external IP address, namely \texttt{5.196.78.28}, is also present in the
+capture and carries MQTT traffic. However, since it is not associated with the HiveMQ
+DNS resolution and belongs to a different hosting provider, it must correspond to a
+different public broker.\\
+
+In summary, the broker mapping used throughout the rest of the report is the
+following:
+
+\begin{itemize}
+    \item local broker: \texttt{::1} (Mosquitto);
+    \item public HiveMQ broker: \texttt{18.192.151.104} and \texttt{35.158.43.69};
+    \item other public broker: \texttt{5.196.78.28}.
+\end{itemize}
+
+This classification was used as the basis for all subsequent filters.
+
+% ============================================================
+\section{Questions on \texttt{A.pcapng}}
+% ============================================================
+
+\subsection{CQ1)}
+\TODO{Marco: add the complete analysis for CQ1a and CQ1b on \texttt{A.pcapng}, including all Wireshark filters used, the list of relevant MIDs, and the final answer.}
+
+\subsection{CQ2)}
+\TODO{Marco: add the complete analysis for CQ2 on \texttt{A.pcapng}, including how unsuccessful CON POST and PUT requests were identified and compared per resource.}
+
+\subsection{CQ3)}
+\TODO{Marco: add the complete analysis for CQ3a and CQ3b on \texttt{A.pcapng}, explaining how separate observe notifications for \texttt{/dining\_room/temperature} were identified and how useless notifications were counted.}
+
+\subsection{CQ4)}
+\TODO{Marco: add the complete analysis for CQ4 on \texttt{A.pcapng}, including the MQTT-SN Wireshark configuration on port 1885 and the counting of messages received by clients from the local broker.}
+
+% ============================================================
+\section{Questions on \texttt{B.pcapng}}
+% ============================================================
+
+\subsection{CQ5) Last Will messages received through wildcard subscriptions}
+
+In MQTT, the \textit{Last Will and Testament} is a message that a client registers
+when opening the connection with the broker. Conceptually, the client is telling the
+broker that if the connection is interrupted unexpectedly, without a graceful
+\texttt{DISCONNECT}, the broker must publish a predefined message on a predefined
+topic. This mechanism is commonly used to notify other clients that a publisher or a
+device has gone offline unexpectedly.\\
+
+The question asks how many MQTT subscribers actually receive such a last will message
+\emph{thanks to a subscription that contains at least one wildcard}. Therefore, the
+problem cannot be solved by only counting will-enabled clients or by only counting
+wildcard subscriptions. Instead, it requires combining three conditions: first, a
+client must define a will topic in the \texttt{CONNECT}; second, that will message
+must actually be published by the broker, which only happens after an abnormal
+disconnect; third, at least one subscriber must receive it through a matching
+wildcard-based subscription.\\
+
+To identify clients that declared a last will, the following filter was used:
+
+\begin{lstlisting}
+mqtt.msgtype == 1 and mqtt.conflag.willflag == 1
+\end{lstlisting}
+
+This filter returned four relevant \texttt{CONNECT} packets. One of them is directed
+to the local broker \texttt{::1}, while the other three are directed to the broker
+\texttt{5.196.78.28}. The corresponding will topics are:
+\begin{itemize}
+    \item \texttt{university/department12/room1/temperature} on the local broker;
+    \item \texttt{metaverse/room2/floor4} on \texttt{5.196.78.28};
+    \item \texttt{hospital/facility3/area3} on \texttt{5.196.78.28};
+    \item \texttt{metaverse/room2/room2} on \texttt{5.196.78.28}.
+\end{itemize}
+
+At this point, it was necessary to verify whether any subscriber existed on the same
+broker for those will topics. For the public broker \texttt{5.196.78.28}, the filter
+
+\begin{lstlisting}
+mqtt.msgtype == 8 and ip.dst == 5.196.78.28
+\end{lstlisting}
+
+showed that no \texttt{SUBSCRIBE} requests were directed to that broker. Therefore,
+even if will messages were configured there, they could not be received by any
+subscriber, and those three cases can be excluded from the analysis.\\
+
+The focus then moved to the will topic declared on the local broker. In order to
+verify whether it was actually published due to an abnormal disconnection, the capture
+was inspected for graceful \texttt{DISCONNECT} packets toward \texttt{::1}:
+
+\begin{lstlisting}
+mqtt.msgtype == 14 and ipv6.dst == ::1
+\end{lstlisting}
+
+No graceful disconnection corresponding to the client connected at the beginning of
+the capture was found. This suggested that the connection might have been interrupted
+abnormally. The hypothesis was confirmed by searching for publishes on the will topic:
+
+\begin{lstlisting}
+mqtt.msgtype == 3 and mqtt.topic == "university/department12/room1/temperature"
+\end{lstlisting}
+
+This filter returned four \texttt{PUBLISH} packets with that exact topic around
+time 146\,s, which is consistent with the broker publishing the will after detecting
+the unexpected client disconnection.\\
+
+The final step was to determine whether any wildcard subscription matched this will
+topic. Since the will topic belongs to the local broker, the relevant subscriptions
+were isolated with:
+
+\begin{lstlisting}
+mqtt.msgtype == 8 and ipv6.dst == ::1 and mqtt.topic contains "#"
+\end{lstlisting}
+
+The wildcard subscriptions found on the local broker were then checked manually
+against the four-level topic
+\texttt{university/department12/room1/temperature}. Among them, the only one that
+matches is:
+
+\begin{lstlisting}
+university/#
+\end{lstlisting}
+
+All the other wildcard subscriptions were excluded because at least one topic level
+did not match the will topic structure or prefix.\\
+
+\textbf{Final answer for CQ5: 1.}\\
+
+Only one subscriber receives a last will message through a subscription containing a
+wildcard. The corresponding client is identified by the Client ID
+\texttt{zmjnxudohrkaegmh}, connected to the local broker \texttt{::1}, with
+subscription \texttt{university/\#}, which matches the will topic
+\texttt{university/department12/room1/temperature}.
+
+\subsection{CQ6a) Clients that erased a retained value on the public HiveMQ broker}
+
+In MQTT, the \texttt{retain} flag instructs the broker to store the published message
+as the last known value for that topic. When a new subscriber later subscribes to the
+same topic, the broker immediately delivers the retained message, even if no new
+publication has occurred in the meantime. This is particularly useful in IoT
+scenarios, where a subscriber often needs the latest available sensor reading as soon
+as it subscribes.\\
+
+To remove a retained value from a topic, MQTT uses a specific convention: a client
+must send a \texttt{PUBLISH} with \texttt{retain = 1} and an \emph{empty payload} on
+that same topic. This is not the same as updating the retained value. A publish with
+\texttt{retain = 1} and a non-empty payload simply overwrites the retained message,
+whereas a publish with \texttt{retain = 1} and zero payload explicitly deletes it
+from the broker state.\\
+
+The question therefore asks how many distinct MQTT clients performed at least one such
+retained-message deletion on the public HiveMQ broker. Since HiveMQ was previously
+identified with the two active IP addresses \texttt{18.192.151.104} and
+\texttt{35.158.43.69}, the first step was to isolate all retained publishes directed
+to those endpoints:
+
+\begin{lstlisting}
+mqtt.msgtype == 3 and mqtt.retain == 1 and
+(ip.dst == 18.192.151.104 or ip.dst == 35.158.43.69)
+\end{lstlisting}
+
+This filter returns all retained publishes toward HiveMQ, but not all of them erase a
+previous retained value. To distinguish deletions from updates, the payload field was
+examined. In Wireshark, after adding \texttt{tcp.stream} as an additional column, the
+packets with empty payload were recognized by the fact that the payload field appeared
+as \texttt{<MISSING>}. Those are exactly the packets corresponding to retained-message
+deletion.\\
+
+By analyzing only the retained publishes with empty payload, five distinct TCP
+streams emerged:
+\begin{itemize}
+    \item stream 1
+    \item stream 22
+    \item stream 23
+    \item stream 43
+    \item stream 44
+\end{itemize}
+
+Each TCP stream corresponds to a separate MQTT connection and therefore to a distinct
+client in this context.\\
+
+\textbf{Final answer for CQ6a: 5.}
+
+\subsection{CQ6b) Of those clients, how many used a Client ID longer than 7 bytes?}
+
+The MQTT Client ID is the identifier sent by a client in the \texttt{CONNECT} packet
+when establishing a session with the broker. The broker uses it to distinguish
+clients, associate persistent session state if required, and manage reconnections. The
+question asks how many of the five clients identified in CQ6a connected to HiveMQ
+using a Client ID whose length is strictly greater than 7 bytes.\\
+
+Starting from the five TCP streams found in CQ6a, the corresponding \texttt{CONNECT}
+packets were isolated with:
+
+\begin{lstlisting}
+mqtt.msgtype == 1 and
+(tcp.stream == 1 or tcp.stream == 22 or tcp.stream == 23
+or tcp.stream == 43 or tcp.stream == 44)
+\end{lstlisting}
+
+For each resulting packet, the MQTT details pane in Wireshark was expanded and the
+\texttt{Client ID} field was read directly together with its byte length. The results
+are summarized below:
+
+\begin{center}
+\begin{tabular}{ccc}
+\toprule
+\textbf{TCP stream} & \textbf{Client ID} & \textbf{Length} \\
+\midrule
+1  & \texttt{pcbtjyj}        & 7  \\
+22 & \texttt{giuxfijwus}     & 10 \\
+23 & \texttt{pohujuv}        & 7  \\
+43 & \texttt{atqeblw}        & 7  \\
+44 & \texttt{rolsmcwhshlbc}  & 13 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Among these five clients, only two have a Client ID strictly longer than 7 bytes:
+\texttt{giuxfijwus} and \texttt{rolsmcwhshlbc}.\\
+
+\textbf{Final answer for CQ6b: 2.}
+
+\subsection{CQ7) Subscribe requests to the local broker with at least two wildcards}
+
+MQTT defines two subscription wildcards. The symbol \texttt{+} is a single-level
+wildcard and matches exactly one topic level, while the symbol \texttt{\#} is a
+multi-level wildcard and matches all the remaining levels, but it can appear only at
+the end of the topic. The question asks how many \texttt{SUBSCRIBE} requests directed
+to the local broker specify a topic containing \emph{at least two wildcards}, in any
+combination. This means that the subscription may contain two \texttt{+} symbols, or
+one \texttt{+} plus one \texttt{\#}, or even more wildcard symbols overall.\\
+
+To isolate candidate subscriptions, the following filter was applied:
+
+\begin{lstlisting}
+mqtt.msgtype == 8 and ipv6.dst == ::1 and
+(mqtt.topic contains "+" or mqtt.topic contains "#")
+\end{lstlisting}
+
+This filter returns all wildcard-based subscriptions directed to the local broker
+\texttt{::1}. The topics were then inspected manually one by one, counting the number
+of wildcard symbols present in each subscription string. The subscriptions containing
+at least two wildcards are the following:
+
+\begin{itemize}
+    \item \texttt{house/+/room1/\#}
+    \item \texttt{factory/+/\#}
+    \item \texttt{metaverse/+/+/hydraulic\_valve}
+    \item \texttt{hospital/fxlugs/+/\#}
+    \item \texttt{metaverse/facility0/+/+}
+    \item \texttt{house/department3/+/+}
+    \item \texttt{metaverse/+/room1/\#}
+    \item \texttt{hospital/+/+/light}
+    \item \texttt{university/+/+/deposit}
+\end{itemize}
+
+All the remaining subscribe topics in the filtered output contain at most one
+wildcard and therefore do not satisfy the condition.\\
+
+\textbf{Final answer for CQ7: 9.}
+
+% ============================================================
+\section{Question on Both Capture Files}
+% ============================================================
+
+\subsection{CQ8)}
+\TODO{Marco: add the complete analysis for CQ8 using both \texttt{A.pcapng} and \texttt{B.pcapng}. Include the methodology used to count the number of topic layers in MQTT publish messages directed to the local broker, the values for CQ8a and CQ8b, the histogram figure, and optionally a commented script if one was used.}
+
+% ============================================================
+\section{Final Answers Summary}
+% ============================================================
+
+For clarity, the final answers obtained in this report section are summarized below.
+
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+\textbf{Question} & \textbf{Answer} \\
+\midrule
+CQ5  & 1 \\
+CQ6a & 5 \\
+CQ6b & 2 \\
+CQ7  & 9 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\TODO{When Marco completes the missing sections, extend this table with CQ1--CQ4 and CQ8.}
+
+% ============================================================
+\section{Conclusion}
+% ============================================================
+
+This report presented the analysis carried out on the packet capture
+\texttt{B.pcapng} in order to answer CQ5, CQ6a, CQ6b, and CQ7 of IoT Challenge 2.
+Before addressing the questions individually, a preliminary network inspection was
+performed to identify the local broker, the public HiveMQ broker, and the additional
+public broker appearing in the trace. This step was necessary to build precise
+Wireshark filters and to avoid mixing traffic belonging to different MQTT endpoints.\\
+
+The analysis then focused on specific MQTT mechanisms that go beyond basic publish and
+subscribe operations, namely last will delivery, retained-message deletion, Client ID
+inspection, and wildcard-based subscriptions. In each case, the answer was obtained by
+combining protocol semantics with packet-level evidence extracted directly from the
+capture, rather than by relying on a single filter in isolation.\\
+
+The resulting answers are the following: exactly one subscriber receives a last will
+message through a wildcard subscription; five different clients send at least one
+message to erase a retained value on the HiveMQ broker; among them, two connect with a
+Client ID longer than seven bytes; and nine subscribe requests directed to the local
+broker specify a topic containing at least two wildcards.\\
+
+The remaining parts of the report, concerning \texttt{A.pcapng} and the comparison
+between the two captures for CQ8, can be completed consistently within the same
+structure.
+
+\end{document}
